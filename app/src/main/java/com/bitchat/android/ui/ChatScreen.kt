@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.IconButton
@@ -75,6 +76,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
     var initialViewerIndex by remember { mutableStateOf(0) }
     var forceScrollToBottom by remember { mutableStateOf(false) }
     var isScrolledUp by remember { mutableStateOf(false) }
+    var replyingToMessage by remember { mutableStateOf<BitchatMessage?>(null) }
 
     // Show password dialog when needed
     LaunchedEffect(showPasswordPrompt) {
@@ -174,6 +176,9 @@ fun ChatScreen(viewModel: ChatViewModel) {
                     selectedMessageForSheet = message
                     showUserSheet = true
                 },
+                onReplySwipe = { message ->
+                    replyingToMessage = message
+                },
                 onCancelTransfer = { msg ->
                     viewModel.cancelMediaSend(msg.id)
                 },
@@ -193,6 +198,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
 
     ChatInputSection(
         messageText = messageText,
+        replyingToMessage = replyingToMessage,
         onMessageTextChange = { newText: TextFieldValue ->
             messageText = newText
             viewModel.updateCommandSuggestions(newText.text)
@@ -200,8 +206,14 @@ fun ChatScreen(viewModel: ChatViewModel) {
         },
         onSend = {
             if (messageText.text.trim().isNotEmpty()) {
-                viewModel.sendMessage(messageText.text.trim())
+                val outgoingText = if (replyingToMessage != null && !messageText.text.trim().startsWith("/")) {
+                    buildReplyMessageContent(replyingToMessage!!, messageText.text.trim())
+                } else {
+                    messageText.text.trim()
+                }
+                viewModel.sendMessage(outgoingText)
                 messageText = TextFieldValue("")
+                replyingToMessage = null
                 forceScrollToBottom = !forceScrollToBottom // Toggle to trigger scroll
             }
         },
@@ -237,7 +249,8 @@ fun ChatScreen(viewModel: ChatViewModel) {
         currentChannel = currentChannel,
         nickname = nickname,
         colorScheme = colorScheme,
-        showMediaButtons = showMediaButtons
+        showMediaButtons = showMediaButtons,
+        onDismissReply = { replyingToMessage = null }
             )
         }
 
@@ -280,16 +293,20 @@ fun ChatScreen(viewModel: ChatViewModel) {
         ) {
             Surface(
                 shape = CircleShape,
-                color = colorScheme.background,
-                tonalElevation = 3.dp,
-                shadowElevation = 6.dp,
-                border = BorderStroke(2.dp, Color(0xFF00C851))
+                color = colorScheme.surface,
+                tonalElevation = 2.dp,
+                shadowElevation = 4.dp,
+                border = BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.18f))
             ) {
-                IconButton(onClick = { forceScrollToBottom = !forceScrollToBottom }) {
+                IconButton(
+                    onClick = { forceScrollToBottom = !forceScrollToBottom },
+                    modifier = Modifier.size(32.dp)
+                ) {
                     Icon(
                         imageVector = Icons.Filled.ArrowDownward,
                         contentDescription = stringResource(com.bitchat.android.R.string.cd_scroll_to_bottom),
-                        tint = Color(0xFF00C851)
+                        modifier = Modifier.size(16.dp),
+                        tint = colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -352,6 +369,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
 @Composable
 fun ChatInputSection(
     messageText: TextFieldValue,
+    replyingToMessage: BitchatMessage?,
     onMessageTextChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
     onSendVoiceNote: (String?, String?, String) -> Unit,
@@ -367,7 +385,8 @@ fun ChatInputSection(
     currentChannel: String?,
     nickname: String,
     colorScheme: ColorScheme,
-    showMediaButtons: Boolean
+    showMediaButtons: Boolean,
+    onDismissReply: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -375,6 +394,13 @@ fun ChatInputSection(
     ) {
         Column {
             HorizontalDivider(color = colorScheme.outline.copy(alpha = 0.3f))
+            replyingToMessage?.let { message ->
+                ReplyComposerBar(
+                    message = message,
+                    onDismiss = onDismissReply
+                )
+                HorizontalDivider(color = colorScheme.outline.copy(alpha = 0.2f))
+            }
             // Command suggestions box
             if (showCommandSuggestions && commandSuggestions.isNotEmpty()) {
                 CommandSuggestionsBox(
@@ -409,6 +435,58 @@ fun ChatInputSection(
         }
     }
 }
+
+@Composable
+private fun ReplyComposerBar(
+    message: BitchatMessage,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colorScheme.background)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(36.dp)
+                .background(colorScheme.primary, CircleShape)
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = message.sender,
+                style = MaterialTheme.typography.labelMedium,
+                color = colorScheme.primary
+            )
+            Text(
+                text = messagePreviewText(message),
+                style = MaterialTheme.typography.bodySmall,
+                color = colorScheme.onSurfaceVariant,
+                maxLines = 2
+            )
+        }
+        IconButton(
+            onClick = onDismiss,
+            modifier = Modifier.size(28.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "Dismiss reply",
+                modifier = Modifier.size(16.dp),
+                tint = colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatFloatingHeader(

@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bitchat.android.model.BitchatMessage
 import com.bitchat.android.core.ui.component.button.CloseButton
 import com.bitchat.android.core.ui.component.sheet.BitchatBottomSheet
 import com.bitchat.android.core.ui.component.sheet.BitchatSheetCenterTopBar
@@ -996,6 +997,7 @@ fun PrivateChatSheet(
                     // Messages list
                     var forceScrollToBottom by remember { mutableStateOf(false) }
                     var isScrolledUp by remember { mutableStateOf(false) }
+                    var replyingToMessage by remember { mutableStateOf<BitchatMessage?>(null) }
 
                     MessagesList(
                         messages = messages,
@@ -1006,6 +1008,7 @@ fun PrivateChatSheet(
                         onScrolledUpChanged = { isUp -> isScrolledUp = isUp },
                         onNicknameClick = { /* handle mention */ },
                         onMessageLongPress = { /* handle long press */ },
+                        onReplySwipe = { message -> replyingToMessage = message },
                         onCancelTransfer = { msg -> viewModel.cancelMediaSend(msg.id) },
                         onImageClick = { _, _, _ -> /* handle image click */ }
                     )
@@ -1023,14 +1026,21 @@ fun PrivateChatSheet(
 
                     ChatInputSection(
                         messageText = messageText,
+                        replyingToMessage = replyingToMessage,
                         onMessageTextChange = { newText ->
                             messageText = newText
                             viewModel.updateMentionSuggestions(newText.text)
                         },
                         onSend = {
                             if (messageText.text.trim().isNotEmpty()) {
-                                viewModel.sendMessage(messageText.text.trim())
+                                val outgoingText = if (replyingToMessage != null && !messageText.text.trim().startsWith("/")) {
+                                    buildReplyMessageContent(replyingToMessage!!, messageText.text.trim())
+                                } else {
+                                    messageText.text.trim()
+                                }
+                                viewModel.sendMessage(outgoingText)
                                 messageText = androidx.compose.ui.text.input.TextFieldValue("")
+                                replyingToMessage = null
                                 forceScrollToBottom = !forceScrollToBottom
                             }
                         },
@@ -1053,7 +1063,8 @@ fun PrivateChatSheet(
                         currentChannel = null,
                         nickname = nickname,
                         colorScheme = colorScheme,
-                        showMediaButtons = true
+                        showMediaButtons = true,
+                        onDismissReply = { replyingToMessage = null }
                     )
                 }
 

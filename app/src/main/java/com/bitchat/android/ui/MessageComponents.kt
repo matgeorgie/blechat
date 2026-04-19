@@ -2,18 +2,24 @@ package com.bitchat.android.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.AnnotatedString
@@ -22,9 +28,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import android.content.Intent
@@ -43,6 +52,8 @@ import com.bitchat.android.model.BitchatMessageType
 import com.bitchat.android.R
 import androidx.compose.ui.res.stringResource
 import com.bitchat.android.ui.theme.ChatFontFamily
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 
 // VoiceNotePlayer moved to com.bitchat.android.ui.media.VoiceNotePlayer
@@ -62,6 +73,7 @@ fun MessagesList(
     onScrolledUpChanged: ((Boolean) -> Unit)? = null,
     onNicknameClick: ((String) -> Unit)? = null,
     onMessageLongPress: ((BitchatMessage) -> Unit)? = null,
+    onReplySwipe: ((BitchatMessage) -> Unit)? = null,
     onCancelTransfer: ((BitchatMessage) -> Unit)? = null,
     onImageClick: ((String, List<String>, Int) -> Unit)? = null
 ) {
@@ -105,24 +117,28 @@ fun MessagesList(
         }
     }
     
+    val renderedMessages = remember(messages) { messages.asReversed() }
+
     LazyColumn(
         state = listState,
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
         modifier = modifier,
         reverseLayout = true
     ) {
-        items(
-            items = messages.asReversed(),
-            key = { it.id }
-        ) { message ->
+        itemsIndexed(
+            items = renderedMessages,
+            key = { _, item -> item.id }
+        ) { index, message ->
             MessageItem(
                 message = message,
                 messages = messages,
                 currentUserNickname = currentUserNickname,
                 meshService = meshService,
+                grouping = messageGrouping(renderedMessages, index),
                 onNicknameClick = onNicknameClick,
                 onMessageLongPress = onMessageLongPress,
+                onReplySwipe = onReplySwipe,
                 onCancelTransfer = onCancelTransfer,
                 onImageClick = onImageClick
             )
@@ -137,8 +153,10 @@ fun MessageItem(
     currentUserNickname: String,
     meshService: BluetoothMeshService,
     messages: List<BitchatMessage> = emptyList(),
+    grouping: MessageGrouping = MessageGrouping(),
     onNicknameClick: ((String) -> Unit)? = null,
     onMessageLongPress: ((BitchatMessage) -> Unit)? = null,
+    onReplySwipe: ((BitchatMessage) -> Unit)? = null,
     onCancelTransfer: ((BitchatMessage) -> Unit)? = null,
     onImageClick: ((String, List<String>, Int) -> Unit)? = null
 ) {
@@ -158,21 +176,75 @@ fun MessageItem(
         isSelf -> Color.White
         else -> if (isDark) Color(0xFFF2F2F2) else Color(0xFF1A1A1A)
     }
+    val swipeOffset = remember(message.id) { Animatable(0f) }
+    val density = LocalDensity.current
+    val swipeScope = rememberCoroutineScope()
+    val swipeThresholdPx = with(density) { 56.dp.toPx() }
+    val swipeMaxPx = with(density) { 72.dp.toPx() }
     
     Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = 8.dp,
+                end = 8.dp,
+                top = grouping.topSpacing,
+                bottom = grouping.bottomSpacing
+            ),
         verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
+            if (swipeOffset.value > 2f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp),
+                    contentAlignment = if (isSelf) Alignment.CenterEnd else Alignment.CenterStart
+                ) {
+                    Text(
+                        text = "\u21A9",
+                        color = if (isSelf) bubbleTextColor.copy(alpha = 0.82f) else colorScheme.primary.copy(alpha = 0.86f),
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.graphicsLayer(
+                            alpha = (swipeOffset.value / swipeThresholdPx).coerceIn(0.2f, 1f)
+                        )
+                    )
+                }
+            }
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .offset { IntOffset(swipeOffset.value.roundToInt(), 0) }
+                    .pointerInput(message.id) {
+                        detectHorizontalDragGestures(
+                            onHorizontalDrag = { _, dragAmount ->
+                                swipeScope.launch {
+                                    swipeOffset.snapTo((swipeOffset.value + dragAmount).coerceIn(0f, swipeMaxPx))
+                                }
+                            },
+                            onDragEnd = {
+                                val shouldReply = swipeOffset.value >= swipeThresholdPx
+                                swipeScope.launch {
+                                    swipeOffset.animateTo(0f, tween(durationMillis = 180))
+                                }
+                                if (shouldReply) {
+                                    onReplySwipe?.invoke(message)
+                                }
+                            },
+                            onDragCancel = {
+                                swipeScope.launch {
+                                    swipeOffset.animateTo(0f, tween(durationMillis = 180))
+                                }
+                            }
+                        )
+                    },
                 horizontalArrangement = if (isSelf) Arrangement.End else Arrangement.Start,
                 verticalAlignment = Alignment.Top
             ) {
                 // Max 75% screen width for bubble — WhatsApp style
                 val endPad = if (message.isPrivate && message.sender == currentUserNickname) 16.dp else 0.dp
                 Surface(
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = bubbleColor,
                     modifier = Modifier
                         .fillMaxWidth(0.75f)
@@ -374,6 +446,7 @@ fun MessageItem(
 
     // Check if this message should be animated during PoW mining
     val shouldAnimate = shouldAnimateMessage(message.id)
+    val parsedReply = remember(message.content) { parseReplyMessageContent(message.content) }
     
     // If animation is needed, use the matrix animation component for content only
     if (shouldAnimate) {
@@ -392,8 +465,10 @@ fun MessageItem(
         )
     } else {
         // Normal message display
+        val displayContent = parsedReply?.body?.takeIf { it.isNotBlank() } ?: message.content
+        val displayMessage = if (displayContent == message.content) message else message.copy(content = displayContent)
         val annotatedText = formatMessageAsAnnotatedString(
-            message = message,
+            message = displayMessage,
             currentUserNickname = currentUserNickname,
             meshService = meshService,
             colorScheme = colorScheme,
@@ -409,8 +484,7 @@ fun MessageItem(
         val context = LocalContext.current
         var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
         
-        Text(
-            text = annotatedText,
+        Column(
             modifier = modifier
                 .pointerInput(message) {
                 detectTapGestures(
@@ -480,16 +554,156 @@ fun MessageItem(
                         onMessageLongPress?.invoke(message)
                     }
                 )
-            },
-            fontFamily = ChatFontFamily,
-            softWrap = true,
-            overflow = TextOverflow.Visible,
-            style = androidx.compose.ui.text.TextStyle(
-                color = bubbleTextColor
-            ),
-            onTextLayout = { result -> textLayoutResult = result }
-        )
+            }
+        ) {
+            parsedReply?.let { reply ->
+                ReplyPreviewCard(
+                    sender = reply.sender,
+                    preview = reply.preview,
+                    isSelf = isSelf,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = if (displayContent.isNotBlank()) 8.dp else 0.dp)
+                )
+            }
+            if (displayContent.isNotBlank()) {
+                Text(
+                    text = annotatedText,
+                    fontFamily = ChatFontFamily,
+                    softWrap = true,
+                    overflow = TextOverflow.Visible,
+                    style = androidx.compose.ui.text.TextStyle(
+                        color = bubbleTextColor
+                    ),
+                    onTextLayout = { result -> textLayoutResult = result }
+                )
+            }
+        }
     }
+}
+
+@Composable
+private fun ReplyPreviewCard(
+    sender: String,
+    preview: String,
+    isSelf: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val containerColor = if (isSelf) {
+        Color.White.copy(alpha = 0.10f)
+    } else {
+        colorScheme.surfaceVariant.copy(alpha = 0.72f)
+    }
+    val contentColor = if (isSelf) Color.White else colorScheme.onSurfaceVariant
+
+    Row(
+        modifier = modifier
+            .background(containerColor, RoundedCornerShape(10.dp))
+            .border(1.dp, colorScheme.primary.copy(alpha = 0.22f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(30.dp)
+                .background(colorScheme.primary, RoundedCornerShape(999.dp))
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = sender,
+                color = contentColor,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = preview,
+                color = contentColor.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+data class MessageGrouping(
+    val topSpacing: Dp = 1.dp,
+    val bottomSpacing: Dp = 1.dp
+)
+
+private fun messageGrouping(
+    renderedMessages: List<BitchatMessage>,
+    index: Int
+): MessageGrouping {
+    val current = renderedMessages[index]
+    val newer = renderedMessages.getOrNull(index - 1)
+    val older = renderedMessages.getOrNull(index + 1)
+    return MessageGrouping(
+        topSpacing = if (older != null && isSameSenderGroup(current, older)) 1.dp else 6.dp,
+        bottomSpacing = if (newer != null && isSameSenderGroup(current, newer)) 1.dp else 4.dp
+    )
+}
+
+private fun isSameSenderGroup(current: BitchatMessage, other: BitchatMessage): Boolean {
+    if (current.sender == "system" || other.sender == "system") return false
+    if (current.isPrivate != other.isPrivate) return false
+    if (current.channel != other.channel) return false
+    return senderIdentityKey(current) == senderIdentityKey(other)
+}
+
+private fun senderIdentityKey(message: BitchatMessage): String {
+    return message.senderPeerID ?: message.originalSender ?: message.sender
+}
+
+private const val ReplyPrefix = "\u21AA "
+
+internal fun buildReplyMessageContent(replyTo: BitchatMessage, body: String): String {
+    val sender = replyTo.sender.ifBlank { "Unknown" }
+    val preview = messagePreviewText(replyTo)
+    return buildString {
+        append(ReplyPrefix)
+        append(sender)
+        append(": ")
+        append(preview)
+        append('\n')
+        append(body)
+    }
+}
+
+internal fun messagePreviewText(message: BitchatMessage): String {
+    val raw = parseReplyMessageContent(message.content)?.body ?: message.content
+    val compact = raw.replace("\n", " ").trim()
+    val fallback = when (message.type) {
+        BitchatMessageType.Audio -> "Voice note"
+        BitchatMessageType.Image -> "Image"
+        BitchatMessageType.File -> "File"
+        else -> compact
+    }
+    return fallback.ifBlank { "Message" }.take(72)
+}
+
+private data class ParsedReplyContent(
+    val sender: String,
+    val preview: String,
+    val body: String
+)
+
+private fun parseReplyMessageContent(content: String): ParsedReplyContent? {
+    if (!content.startsWith(ReplyPrefix)) return null
+    val firstLineBreak = content.indexOf('\n')
+    if (firstLineBreak <= ReplyPrefix.length) return null
+    val header = content.substring(ReplyPrefix.length, firstLineBreak)
+    val separatorIndex = header.indexOf(": ")
+    if (separatorIndex <= 0) return null
+    return ParsedReplyContent(
+        sender = header.substring(0, separatorIndex).trim(),
+        preview = header.substring(separatorIndex + 2).trim(),
+        body = content.substring(firstLineBreak + 1)
+    )
 }
 
 @Composable
