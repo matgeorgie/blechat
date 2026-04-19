@@ -80,7 +80,8 @@ class MessageRouter private constructor(
             nostr.sendPrivateMessage(content, toPeerID, recipientNickname, messageID)
         } else {
             Log.d(TAG, "Queued PM for ${toPeerID} (no mesh, no Nostr mapping) msg_id=${messageID.take(8)}…")
-            val q = outbox.getOrPut(toPeerID) { mutableListOf() }
+            val queueKey = stableOutboxKeyFor(toPeerID)
+            val q = outbox.getOrPut(queueKey) { mutableListOf() }
             q.add(Triple(content, recipientNickname, messageID))
             Log.d(TAG, "Initiating noise handshake after queueing PM for ${toPeerID.take(8)}…")
             mesh.initiateNoiseHandshake(toPeerID)
@@ -192,9 +193,29 @@ class MessageRouter private constructor(
         } catch (_: Exception) { null }
     }
 
+    private fun stableOutboxKeyFor(peerID: String): String {
+        if (peerID.length == 64 && peerID.matches(Regex("^[0-9a-fA-F]+$"))) {
+            return peerID
+        }
+        val noiseHex = try {
+            mesh.getPeerInfo(peerID)?.noisePublicKey?.joinToString("") { b -> "%02x".format(b) }
+        } catch (_: Exception) { null }
+        return noiseHex ?: peerID
+    }
+
+    private fun migrateOutboxKey(fromKey: String, toKey: String?) {
+        if (toKey.isNullOrBlank() || fromKey == toKey) return
+        val queued = outbox.remove(fromKey) ?: return
+        if (queued.isEmpty()) return
+        val target = outbox.getOrPut(toKey) { mutableListOf() }
+        target.addAll(queued)
+    }
+
     // Called when mesh peer list changes; attempt to flush any matching outbox entries
     fun onPeersUpdated(peers: List<String>) {
         peers.forEach { pid ->
+            val stableKey = stableOutboxKeyFor(pid)
+            migrateOutboxKey(pid, stableKey)
             flushOutboxFor(pid)
             val noiseHex = try {
                 mesh.getPeerInfo(pid)?.noisePublicKey?.joinToString("") { b -> "%02x".format(b) }
@@ -205,6 +226,8 @@ class MessageRouter private constructor(
 
     // Called when a Noise session becomes established; flush both the mesh peerID and its noiseHex alias
     fun onSessionEstablished(peerID: String) {
+        val stableKey = stableOutboxKeyFor(peerID)
+        migrateOutboxKey(peerID, stableKey)
         flushOutboxFor(peerID)
         val noiseHex = try {
             mesh.getPeerInfo(peerID)?.noisePublicKey?.joinToString("") { b -> "%02x".format(b) }

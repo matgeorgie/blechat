@@ -130,7 +130,7 @@ class ChatViewModel(
     val verifiedFingerprints = verificationHandler.verifiedFingerprints
 
     // Media file sending manager
-    private val mediaSendingManager = MediaSendingManager(state, messageManager, channelManager) { meshService }
+    private val mediaSendingManager = MediaSendingManager(state, messageManager, channelManager, groupManager) { meshService }
     
     // Delegate handler for mesh callbacks
     private val meshDelegateHandler = MeshDelegateHandler(
@@ -419,12 +419,13 @@ class ChatViewModel(
         // Send invite to each selected peer
         val payload = GroupManager.INVITE_PREFIX + Gson().toJson(groupManager.buildInvitePayload(groupInfo))
         selectedPeerIDs.forEach { peerID ->
-            val recipientNickname = meshService.getPeerNicknames()[peerID]
-            if (!recipientNickname.isNullOrBlank()) {
-                com.bitchat.android.services.MessageRouter
-                    .getInstance(getApplication(), meshService)
-                    .sendPrivate(payload, peerID, recipientNickname, java.util.UUID.randomUUID().toString())
-            }
+            val recipientNickname = meshService.getPeerNicknames()[peerID] ?: peerID
+            meshService.sendPrivateMessage(
+                payload,
+                peerID,
+                recipientNickname,
+                java.util.UUID.randomUUID().toString()
+            )
         }
 
         // Switch to the new group channel
@@ -488,13 +489,17 @@ class ChatViewModel(
             )
         ) ?: return false
 
-        val router = com.bitchat.android.services.MessageRouter.getInstance(getApplication(), meshService)
         val invitePayload = GroupManager.INVITE_PREFIX + Gson().toJson(groupManager.buildInvitePayload(updated))
         addedPeerIDs.forEach { peerID ->
             val nickname = updated.memberNicknames[peerID]
                 ?: meshService.getPeerNicknames()[peerID]
-                ?: return@forEach
-            router.sendPrivate(invitePayload, peerID, nickname, java.util.UUID.randomUUID().toString())
+                ?: peerID
+            meshService.sendPrivateMessage(
+                invitePayload,
+                peerID,
+                nickname,
+                java.util.UUID.randomUUID().toString()
+            )
         }
 
         routeGroupControlUpdate(
@@ -786,7 +791,7 @@ class ChatViewModel(
             .forEach { peerID ->
                 val nickname = groupInfo.memberNicknames[peerID]
                     ?: meshService.getPeerNicknames()[peerID]
-                    ?: return@forEach
+                    ?: peerID
                 router.sendPrivate(payload, peerID, nickname, messageID)
             }
     }
@@ -814,7 +819,7 @@ class ChatViewModel(
         recipientPeerIDs.distinct().forEach { peerID ->
             val nickname = groupInfo?.memberNicknames?.get(peerID)
                 ?: meshService.getPeerNicknames()[peerID]
-                ?: return@forEach
+                ?: peerID
             router.sendPrivate(message, peerID, nickname, messageID)
         }
     }

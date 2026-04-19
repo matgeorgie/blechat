@@ -47,10 +47,10 @@ class MeshDelegateHandler(
             onHapticFeedback()
 
             if (message.isPrivate) {
-                if (handleGroupControl(message)) {
+                if (handleGroupInvite(message)) {
                     return@launch
                 }
-                if (handleGroupInvite(message)) {
+                if (handleGroupControl(message)) {
                     return@launch
                 }
                 // Private message

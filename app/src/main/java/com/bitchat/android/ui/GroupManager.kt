@@ -1,6 +1,7 @@
 package com.bitchat.android.ui
 
 import com.bitchat.android.model.BitchatMessage
+import com.google.gson.Gson
 import java.util.Date
 import java.util.UUID
 
@@ -36,6 +37,7 @@ class GroupManager(
         const val INVITE_PREFIX = "[GROUP_INVITE]"
         const val MESSAGE_PREFIX = "[GROUP_MSG]"
         const val CONTROL_PREFIX = "[GROUP_CTRL]"
+        private const val FILE_PREFIX = "[GROUP_FILE]"
         private const val GROUP_PREFIX = "grp_"
         const val ACTION_METADATA_UPDATED = "metadata_updated"
         const val ACTION_MEMBERSHIP_UPDATED = "membership_updated"
@@ -43,17 +45,33 @@ class GroupManager(
         const val ACTION_MEMBER_LEFT = "member_left"
 
         fun isGroupChannel(channel: String): Boolean = channel.startsWith(GROUP_PREFIX)
+
+        fun encodeGroupFileName(groupID: String, messageID: String, originalFileName: String): String {
+            return FILE_PREFIX + Gson().toJson(
+                GroupFilePayload(
+                    groupID = groupID,
+                    messageID = messageID,
+                    originalFileName = originalFileName
+                )
+            )
+        }
+
+        fun decodeGroupFileName(fileName: String): GroupFilePayload? {
+            if (!fileName.startsWith(FILE_PREFIX)) return null
+            return runCatching {
+                Gson().fromJson(
+                    fileName.removePrefix(FILE_PREFIX),
+                    GroupFilePayload::class.java
+                )
+            }.getOrNull()
+        }
     }
 
     data class GroupInvitePayload(
         val groupID: String,
         val name: String,
-        val description: String,
         val memberPeerIDs: List<String>,
         val memberNicknames: Map<String, String>,
-        val adminPeerIDs: List<String>,
-        val createdAtMs: Long,
-        val updatedAtMs: Long,
         val createdByPeerID: String
     )
 
@@ -77,6 +95,12 @@ class GroupManager(
         val updatedAtMs: Long,
         val targetPeerID: String? = null,
         val targetNickname: String? = null
+    )
+
+    data class GroupFilePayload(
+        val groupID: String,
+        val messageID: String,
+        val originalFileName: String
     )
 
     fun loadPersistedGroups(myPeerID: String) {
@@ -116,25 +140,21 @@ class GroupManager(
         return groupInfo
     }
 
-    fun joinGroupFromInvite(payload: GroupInvitePayload, myPeerID: String, inviterName: String?) {
+    fun joinGroupFromInvite(
+        payload: GroupInvitePayload,
+        myPeerID: String,
+        inviterName: String?
+    ) {
         if (!payload.memberPeerIDs.contains(myPeerID)) return
         val info = GroupInfo(
             id = payload.groupID,
             name = payload.name,
-            description = payload.description,
             memberPeerIDs = payload.memberPeerIDs.distinct(),
             memberNicknames = payload.memberNicknames,
-            adminPeerIDs = payload.adminPeerIDs.distinct(),
-            createdByPeerID = payload.createdByPeerID,
-            createdAtMs = payload.createdAtMs,
-            updatedAtMs = payload.updatedAtMs
-        )
-            .withResolvedAdmins()
-        val existing = state.getGroupInfoMapValue()[info.id]
-        if (existing != null && existing.updatedAtMs > info.updatedAtMs) {
-            return
-        }
-        val isNew = existing == null
+            adminPeerIDs = listOf(payload.createdByPeerID),
+            createdByPeerID = payload.createdByPeerID
+        ).withResolvedAdmins()
+        val isNew = state.getGroupInfoMapValue()[info.id] == null
         upsertGroup(info, myPeerID)
         if (isNew) {
             addSystemEvent(
@@ -262,12 +282,8 @@ class GroupManager(
         return GroupInvitePayload(
             groupID = groupInfo.id,
             name = groupInfo.name,
-            description = groupInfo.description,
             memberPeerIDs = groupInfo.memberPeerIDs,
             memberNicknames = groupInfo.memberNicknames,
-            adminPeerIDs = groupInfo.adminPeerIDs,
-            createdAtMs = groupInfo.createdAtMs,
-            updatedAtMs = groupInfo.updatedAtMs,
             createdByPeerID = groupInfo.createdByPeerID
         )
     }

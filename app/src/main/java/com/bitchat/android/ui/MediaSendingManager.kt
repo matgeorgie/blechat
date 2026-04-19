@@ -16,6 +16,7 @@ class MediaSendingManager(
     private val state: ChatState,
     private val messageManager: MessageManager,
     private val channelManager: ChannelManager,
+    private val groupManager: GroupManager,
     private val getMeshService: () -> BluetoothMeshService
 ) {
     // Helper to get current mesh service (may change after panic clear)
@@ -225,6 +226,11 @@ class MediaSendingManager(
         filePath: String,
         messageType: BitchatMessageType
     ) {
+        if (!channelOrNull.isNullOrBlank() && GroupManager.isGroupChannel(channelOrNull)) {
+            sendGroupFile(channelOrNull, filePacket, filePath, messageType)
+            return
+        }
+
         val payload = filePacket.encode()
         if (payload == null) {
             Log.e(TAG, "❌ Failed to encode file packet for broadcast send")
@@ -268,6 +274,54 @@ class MediaSendingManager(
         Log.d(TAG, "📤 Calling meshService.sendFileBroadcast")
         meshService.sendFileBroadcast(filePacket)
         Log.d(TAG, "✅ File broadcast completed successfully")
+    }
+
+    private fun sendGroupFile(
+        groupID: String,
+        filePacket: BitchatFilePacket,
+        filePath: String,
+        messageType: BitchatMessageType
+    ) {
+        val memberPeerIDs = groupManager.getOtherMembers(groupID, meshService.myPeerID)
+        if (memberPeerIDs.isEmpty()) return
+
+        val messageId = java.util.UUID.randomUUID().toString().uppercase()
+        val wrappedPacket = filePacket.copy(
+            fileName = GroupManager.encodeGroupFileName(groupID, messageId, filePacket.fileName)
+        )
+        val payload = wrappedPacket.encode()
+        if (payload == null) {
+            Log.e(TAG, "Failed to encode group file packet")
+            return
+        }
+
+        val transferId = sha256Hex(payload)
+        val message = BitchatMessage(
+            id = messageId,
+            sender = state.getNicknameValue() ?: meshService.myPeerID,
+            content = filePath,
+            type = messageType,
+            timestamp = Date(),
+            isRelay = false,
+            senderPeerID = meshService.myPeerID,
+            channel = groupID
+        )
+
+        channelManager.addChannelMessage(groupID, message, meshService.myPeerID)
+
+        synchronized(transferMessageMap) {
+            transferMessageMap[transferId] = message.id
+            messageTransferMap[message.id] = transferId
+        }
+
+        messageManager.updateMessageDeliveryStatus(
+            message.id,
+            com.bitchat.android.model.DeliveryStatus.PartiallyDelivered(0, memberPeerIDs.size)
+        )
+
+        memberPeerIDs.forEach { peerID ->
+            meshService.sendFilePrivate(peerID, wrappedPacket)
+        }
     }
 
     /**

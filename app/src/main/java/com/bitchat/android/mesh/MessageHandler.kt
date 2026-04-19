@@ -167,19 +167,35 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
                     val file = com.bitchat.android.model.BitchatFilePacket.decode(noisePayload.data)
                     if (file != null) {
                         Log.d(TAG, "🔓 Decrypted encrypted file from $peerID: name='${file.fileName}', size=${file.fileSize}, mime='${file.mimeType}'")
-                        val uniqueMsgId = java.util.UUID.randomUUID().toString().uppercase()
-                        val savedPath = com.bitchat.android.features.file.FileUtils.saveIncomingFile(appContext, file)
-                        val message = BitchatMessage(
-                            id = uniqueMsgId,
-                            sender = delegate?.getPeerNickname(peerID) ?: "Unknown",
-                            content = savedPath,
-                            type = com.bitchat.android.features.file.FileUtils.messageTypeForMime(file.mimeType),
-                            timestamp = java.util.Date(packet.timestamp.toLong()),
-                            isRelay = false,
-                            isPrivate = true,
-                            recipientNickname = delegate?.getMyNickname(),
-                            senderPeerID = peerID
-                        )
+                        val groupFile = GroupManager.decodeGroupFileName(file.fileName)
+                        val normalizedFile = groupFile?.let { file.copy(fileName = it.originalFileName) } ?: file
+                        val uniqueMsgId = groupFile?.messageID ?: java.util.UUID.randomUUID().toString().uppercase()
+                        val savedPath = com.bitchat.android.features.file.FileUtils.saveIncomingFile(appContext, normalizedFile)
+                        val message = if (groupFile != null) {
+                            BitchatMessage(
+                                id = uniqueMsgId,
+                                sender = delegate?.getPeerNickname(peerID) ?: "Unknown",
+                                content = savedPath,
+                                type = com.bitchat.android.features.file.FileUtils.messageTypeForMime(normalizedFile.mimeType),
+                                timestamp = java.util.Date(packet.timestamp.toLong()),
+                                isRelay = false,
+                                isPrivate = false,
+                                senderPeerID = peerID,
+                                channel = groupFile.groupID
+                            )
+                        } else {
+                            BitchatMessage(
+                                id = uniqueMsgId,
+                                sender = delegate?.getPeerNickname(peerID) ?: "Unknown",
+                                content = savedPath,
+                                type = com.bitchat.android.features.file.FileUtils.messageTypeForMime(normalizedFile.mimeType),
+                                timestamp = java.util.Date(packet.timestamp.toLong()),
+                                isRelay = false,
+                                isPrivate = true,
+                                recipientNickname = delegate?.getMyNickname(),
+                                senderPeerID = peerID
+                            )
+                        }
 
                         Log.d(TAG, "📄 Saved encrypted incoming file to $savedPath (msgId=$uniqueMsgId)")
                         delegate?.onMessageReceived(message)
@@ -496,17 +512,32 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
                 if (isFileTransfer) {
                     Log.d(TAG, "📥 FILE_TRANSFER decode success (private): name='${file.fileName}', size=${file.fileSize}, mime='${file.mimeType}', from=${peerID.take(8)}")
                 }
-                val savedPath = com.bitchat.android.features.file.FileUtils.saveIncomingFile(appContext, file)
-                val message = BitchatMessage(
-                    id = java.util.UUID.randomUUID().toString().uppercase(),
-                    sender = delegate?.getPeerNickname(peerID) ?: "unknown",
-                    content = savedPath,
-                    type = com.bitchat.android.features.file.FileUtils.messageTypeForMime(file.mimeType),
-                    senderPeerID = peerID,
-                    timestamp = Date(packet.timestamp.toLong()),
-                    isPrivate = true,
-                    recipientNickname = delegate?.getMyNickname()
-                )
+                val groupFile = GroupManager.decodeGroupFileName(file.fileName)
+                val normalizedFile = groupFile?.let { file.copy(fileName = it.originalFileName) } ?: file
+                val savedPath = com.bitchat.android.features.file.FileUtils.saveIncomingFile(appContext, normalizedFile)
+                val message = if (groupFile != null) {
+                    BitchatMessage(
+                        id = groupFile.messageID,
+                        sender = delegate?.getPeerNickname(peerID) ?: "unknown",
+                        content = savedPath,
+                        type = com.bitchat.android.features.file.FileUtils.messageTypeForMime(normalizedFile.mimeType),
+                        senderPeerID = peerID,
+                        timestamp = Date(packet.timestamp.toLong()),
+                        isPrivate = false,
+                        channel = groupFile.groupID
+                    )
+                } else {
+                    BitchatMessage(
+                        id = java.util.UUID.randomUUID().toString().uppercase(),
+                        sender = delegate?.getPeerNickname(peerID) ?: "unknown",
+                        content = savedPath,
+                        type = com.bitchat.android.features.file.FileUtils.messageTypeForMime(normalizedFile.mimeType),
+                        senderPeerID = peerID,
+                        timestamp = Date(packet.timestamp.toLong()),
+                        isPrivate = true,
+                        recipientNickname = delegate?.getMyNickname()
+                    )
+                }
                 Log.d(TAG, "📄 Saved incoming file to $savedPath")
                 delegate?.onMessageReceived(message)
                 return
