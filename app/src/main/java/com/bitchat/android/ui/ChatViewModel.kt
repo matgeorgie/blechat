@@ -56,6 +56,8 @@ class ChatViewModel(
 
     companion object {
         private const val TAG = "ChatViewModel"
+        private const val GROUP_HANDSHAKE_WAIT_MS = 6_000L
+        private const val GROUP_HANDSHAKE_POLL_MS = 250L
     }
 
     fun sendVoiceNote(toPeerIDOrNull: String?, channelOrNull: String?, filePath: String) {
@@ -420,11 +422,11 @@ class ChatViewModel(
         val payload = GroupManager.INVITE_PREFIX + Gson().toJson(groupManager.buildInvitePayload(groupInfo))
         selectedPeerIDs.forEach { peerID ->
             val recipientNickname = meshService.getPeerNicknames()[peerID] ?: peerID
-            meshService.sendPrivateMessage(
-                payload,
-                peerID,
-                recipientNickname,
-                java.util.UUID.randomUUID().toString()
+            sendGroupPrivatePayload(
+                payload = payload,
+                peerID = peerID,
+                recipientNickname = recipientNickname,
+                messageID = java.util.UUID.randomUUID().toString()
             )
         }
 
@@ -494,11 +496,11 @@ class ChatViewModel(
             val nickname = updated.memberNicknames[peerID]
                 ?: meshService.getPeerNicknames()[peerID]
                 ?: peerID
-            meshService.sendPrivateMessage(
-                invitePayload,
-                peerID,
-                nickname,
-                java.util.UUID.randomUUID().toString()
+            sendGroupPrivatePayload(
+                payload = invitePayload,
+                peerID = peerID,
+                recipientNickname = nickname,
+                messageID = java.util.UUID.randomUUID().toString()
             )
         }
 
@@ -784,15 +786,12 @@ class ChatViewModel(
         val payload = GroupManager.MESSAGE_PREFIX + Gson().toJson(
             groupManager.buildGroupMessagePayload(groupID, messageID, content)
         )
-        val router = com.bitchat.android.services.MessageRouter.getInstance(getApplication(), meshService)
-        val connectedPeerIDs = state.getConnectedPeersValue().toSet()
         groupManager.getOtherMembers(groupID, meshService.myPeerID)
-            .filter { connectedPeerIDs.contains(it) }
             .forEach { peerID ->
                 val nickname = groupInfo.memberNicknames[peerID]
                     ?: meshService.getPeerNicknames()[peerID]
                     ?: peerID
-                router.sendPrivate(payload, peerID, nickname, messageID)
+                sendGroupPrivatePayload(payload, peerID, nickname, messageID)
             }
     }
 
@@ -814,13 +813,37 @@ class ChatViewModel(
             updatedAtMs = it.updatedAtMs
         ) }
         val controlPayload = payload ?: return
-        val router = com.bitchat.android.services.MessageRouter.getInstance(getApplication(), meshService)
         val message = GroupManager.CONTROL_PREFIX + Gson().toJson(controlPayload)
         recipientPeerIDs.distinct().forEach { peerID ->
             val nickname = groupInfo?.memberNicknames?.get(peerID)
                 ?: meshService.getPeerNicknames()[peerID]
                 ?: peerID
-            router.sendPrivate(message, peerID, nickname, messageID)
+            sendGroupPrivatePayload(message, peerID, nickname, messageID)
+        }
+    }
+
+    private fun sendGroupPrivatePayload(
+        payload: String,
+        peerID: String,
+        recipientNickname: String,
+        messageID: String
+    ) {
+        viewModelScope.launch {
+            val router = com.bitchat.android.services.MessageRouter.getInstance(getApplication(), meshService)
+            ensureNoiseSessionForGroupPeer(peerID)
+            router.sendPrivate(payload, peerID, recipientNickname, messageID)
+        }
+    }
+
+    private suspend fun ensureNoiseSessionForGroupPeer(peerID: String) {
+        if (meshService.hasEstablishedSession(peerID)) return
+
+        meshService.sendAnnouncementToPeer(peerID)
+        meshService.initiateNoiseHandshake(peerID)
+
+        val deadline = System.currentTimeMillis() + GROUP_HANDSHAKE_WAIT_MS
+        while (!meshService.hasEstablishedSession(peerID) && System.currentTimeMillis() < deadline) {
+            delay(GROUP_HANDSHAKE_POLL_MS)
         }
     }
 

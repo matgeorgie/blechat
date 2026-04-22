@@ -205,6 +205,11 @@ class BluetoothMeshService(private val context: Context) {
                 // Send announcement and cached messages after key exchange
                 serviceScope.launch {
                     Log.d(TAG, "Key exchange completed with $peerID; sending follow-ups")
+                    runCatching {
+                        com.bitchat.android.services.MessageRouter
+                            .getInstance(context.applicationContext, this@BluetoothMeshService)
+                            .onSessionEstablished(peerID)
+                    }
                     delay(100)
                     sendAnnouncementToPeer(peerID)
                     
