@@ -4,8 +4,6 @@ IRC-style chat over a Bluetooth LE mesh network - no internet required, no serve
 
 This repo contains the Android client built with Kotlin + Jetpack Compose, using a foreground service to keep the mesh running in the background.
 
-![App icon](fastlane/metadata/android/en-US/images/icon.png)
-
 ## Quick start
 
 - Android Studio: open the repo folder and run the `app` configuration on a physical device.
